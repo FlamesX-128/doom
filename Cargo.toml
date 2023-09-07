@@ -5,6 +5,14 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "doom_engine"
+path = "engine/main.rs" 
+
+[lib]
+name = "doom_wad"
+path = "src/lib.rs"
+
 [dependencies]
 sfml = "0.21.0"
 rand = "0.8"

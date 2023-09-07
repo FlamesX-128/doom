@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, Read, Seek}
+    io::{self, Read, Seek},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -171,27 +171,28 @@ impl Directory {
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
 pub struct Header {
-    pub identification: [u8; 4],
-    pub num_lumps: u32,
-    pub info_table_offset: u32,
+    pub identifier: [u8; 4],
+    pub count: u32,
+    pub offset: u32,
 }
 
 impl Default for Header {
     fn default() -> Self {
         Self {
-            identification: [0; 4],
-            num_lumps: 0,
-            info_table_offset: 0,
+            identifier: [0; 4],
+            count: 0,
+            offset: 0,
         }
     }
 }
 
 impl Header {
     pub fn identification(&self) -> String {
-        WAD::slice_to_string(&self.identification)
+        WAD::slice_to_string(&self.identifier)
     }
 }
 
+#[derive(Debug)]
 pub struct WAD {
     pub things: Vec<Thing>,
     pub line_defs: Vec<LineDef>,
@@ -224,12 +225,12 @@ impl WAD {
     const HEADER_SIZE: usize = 12;
 
     fn read_directory(&mut self) -> io::Result<()> {
-        let offset = self.header.info_table_offset as u64;
+        let offset = self.header.offset as u64;
 
         self.directory.clear();
         self.file.seek(io::SeekFrom::Start(offset))?;
 
-        for _ in 0..(self.header.num_lumps as usize) {
+        for _ in 0..(self.header.count as usize) {
             let mut bytes = [0; Self::DIRECTORY_SIZE];
 
             self.file.read_exact(&mut bytes)?;
@@ -350,7 +351,138 @@ impl WAD {
     }
 }
 
-// - - - 
+// - - -
+#[derive(Debug)]
+pub struct Player {
+    pub thing: Thing,
+    pub position: (f32, f32),
+    pub angle: f32,
+}
+
+impl Player {
+    pub fn new(thing: Thing) -> Self {
+        Self {
+            thing,
+            position: (thing.x as f32, thing.y as f32),
+            angle: thing.angle as f32,
+        }
+    }
+}
+
+// - - -
+pub struct BSP <'a> {
+    pub map_data: &'a WAD, 
+    pub root_node_id: usize,
+}
+
+impl <'a> BSP <'a> {
+    pub fn is_on_back_side(&self, player: &Player, node: &Node) -> bool {
+        let dx = player.position.0 - node.x_partition as f32;
+        let dy = player.position.1 - node.y_partition as f32;
+
+        dx * node.change_y_partition as f32 - dy * node.change_x_partition as f32 <= 0.0
+    }
+
+    pub fn render_sub_sector(&self, player: &Player, sub_sector_id: u16) {
+        let sub_sector = self.map_data.ssectors[sub_sector_id as usize];
+
+        for i in 0..sub_sector.num_segs {
+            let seg = &self.map_data.segs[sub_sector.first_seg as usize + i as usize];
+
+
+        }
+    }
+
+    pub fn render_bsp_node(&self, player: &Player, node_id: u16) {
+        let sub_sector_identifier = 0x8000;
+        let mut sub_sector_id = 0;
+
+        let node = &self.map_data.nodes[node_id as usize];
+
+        if node_id >= sub_sector_identifier {
+            sub_sector_id = node_id - sub_sector_identifier;
+
+            self.render_sub_sector(player, sub_sector_id);            
+            return
+        }
+
+        if self.is_on_back_side(player, node) {
+            self.render_bsp_node(player, node.right_child as u16);
+            self.render_bsp_node(player, node.left_child as u16);
+        } else {
+            self.render_bsp_node(player, node.left_child as u16);
+            self.render_bsp_node(player, node.right_child as u16);
+        }
+
+            
+    }
+
+    pub fn update(&self, player: &Player) {
+        self.render_bsp_node(player, self.root_node_id as u16); 
+    }
+}
+
+impl <'a> BSP <'a> {
+    pub fn new(map_data: &'a WAD) -> Self {
+        let root_node_id = map_data.nodes.len() - 1;
+
+        Self {
+            map_data,
+            root_node_id,
+        }
+    }
+}
+
+// - - -
+pub struct Engine <'a> {
+    pub window: &'a mut RenderWindow,
+    pub wad: &'a WAD,
+    pub player: Player,
+    pub bsp: BSP<'a>,
+}
+
+impl <'a> Engine <'a> {
+    pub fn draw_circle(&mut self, x: f32, y: f32, radius: f32, color: Color) {
+        let mut circle = CircleShape::new(radius, 30);
+        circle.set_fill_color(color);
+        circle.set_position(Vector2f::new(x, y));
+
+        self.window.draw(&circle);
+    }
+
+    pub fn draw_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, color: Color) {
+        let mut line = RectangleShape::new();
+        line.set_fill_color(color);
+        line.set_size(Vector2f::new(1.0, 1.0));
+        line.set_position(Vector2f::new(x1, y1));
+        line.set_rotation((y2 - y1).atan2(x2 - x1).to_degrees());
+
+        let length = ((x2 - x1).powi(2) + (y2 - y1).powi(2)).sqrt();
+        line.set_size(Vector2f::new(length, 1.0));
+
+        self.window.draw(&line);
+    }
+}
+
+impl <'a> Engine <'a> {
+    pub fn update(&self) {}
+}
+
+impl <'a> Engine <'a> {
+    pub fn new(window: &'a mut RenderWindow, wad: &'a WAD) -> Self {
+        let player = Player::new(wad.things[0]);
+        let bsp = BSP::new(&wad);
+
+        Self {
+            window,
+            wad,
+            player,
+            bsp,
+        }
+    }
+}
+
+// - - -
 
 use sfml::{
     graphics::{
@@ -360,7 +492,9 @@ use sfml::{
     window::{ContextSettings, Event, Key, Style},
 };
 
-pub struct MapViewer {
+pub struct MapViewer <'a> {
+    window: &'a mut RenderWindow,
+
     w_height: f32,
     w_width: f32,
 
@@ -370,10 +504,12 @@ pub struct MapViewer {
     min_map_width: f32,
 
     map_vertexes: Vec<Vector2f>,
-    map_data: WAD,
+    map_data:&'a  WAD,
+
+    engine: Engine<'a>,
 }
 
-impl MapViewer {
+impl <'a> MapViewer <'_> {
     pub fn calc_map_bounds(&mut self) {
         let vertexes = self.map_data.vertexes.to_vec();
 
@@ -394,7 +530,7 @@ impl MapViewer {
     }
 }
 
-impl MapViewer {
+impl <'a> MapViewer <'a> {
     pub fn traslate_vertex_x(&self, x: f32) -> f32 {
         (x.min(self.max_map_width).max(self.min_map_width) - self.min_map_width)
             * ((self.w_width - 30.0) - 30.0)
@@ -411,20 +547,9 @@ impl MapViewer {
     }
 }
 
-impl MapViewer {
-    pub fn run(&self) {
-        let w_title = "Where's All the Data? - Map Viewer";
-
-        let w_height = self.w_height as u32;
-        let w_width = self.w_width as u32;
-
-        let context = ContextSettings {
-            antialiasing_level: 0,
-            ..Default::default()
-        };
-
-        let mut window = RenderWindow::new((w_width, w_height), w_title, Style::CLOSE, &context);
-        window.set_vertical_sync_enabled(true);
+impl <'a> MapViewer <'a> {
+    pub fn run(&mut self) {
+        let window = &mut self.window;
 
         let vertexes = &self.map_vertexes;
         let linedefs = &self.map_data.line_defs;
@@ -474,16 +599,50 @@ impl MapViewer {
                 window.draw(&line);
             }
 
+            // Draw Player
+            /*let mut player = CircleShape::new(2.0, 12);
+
+            player.set_fill_color(Color::BLUE);
+
+            let player_x = self.traslate_vertex_x(self.player.position.0);
+            let player_y = self.traslate_vertex_y(self.player.position.1);
+
+            player.set_position(Vector2f::new(player_x, player_y));
+            player.set_rotation(self.player.angle.to_degrees());
+
+            window.draw(&player);*/
             window.display();
         }
     }
 }
 
-impl MapViewer {
-    pub fn new(width: f32, height: f32, map_data: WAD) -> Self {
+impl <'a> MapViewer <'a> {
+    pub fn new(width: f32, height: f32, map_data: &'a WAD) -> Self {
+        let w_title = "Where's All the Data? - Map Viewer";
+
+        let w_height = height as u32;
+        let w_width = width as u32;
+
+        let context = ContextSettings {
+            antialiasing_level: 0,
+            ..Default::default()
+        };
+
+        let mut window = RenderWindow::new((w_width, w_height), w_title, Style::CLOSE, &context);
+        window.set_vertical_sync_enabled(true);
+
         let m_vertexes = map_data.vertexes.clone();
 
+        let player_thing = map_data.things[0];
+        
+        let player = Player::new(player_thing.clone());
+        let bsp = BSP::new(&map_data);
+
+        let engine = Engine::new(&mut window, &map_data);
+
         let mut viewer = Self {
+            window: & mut window,
+
             w_height: height,
             w_width: width,
 
@@ -494,6 +653,8 @@ impl MapViewer {
 
             map_vertexes: Vec::new(),
             map_data,
+
+            engine: engine,
         };
 
         let mut vertexes = Vec::new();
@@ -513,10 +674,9 @@ impl MapViewer {
 
 #[test]
 fn test_map_viewer() {
-    let mut map_data = WAD::new("/home/flames/Downloads/DOOM2.WAD").unwrap();
-    let _ = map_data.change_map("MAP01");
+    let mut map_data = WAD::new("/home/flames/Downloads/DOOM.wad").unwrap();
+    let _ = map_data.change_map("E1M1");
 
-    let map_viewer = MapViewer::new(320.0 * 4.0, 200.0 * 4.0, map_data);
+    let map_viewer = MapViewer::new(320.0 * 4.0, 200.0 * 4.0, &map_data);
     map_viewer.run();
 }
-
